@@ -1,0 +1,136 @@
+name: Terraform Apply
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to apply the saved plan from (leave blank to force a fresh plan+apply)"
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read # Required to download artifacts cross-workflow
+
+env:
+  TF_WORKING_DIR: "."
+  TF_VERSION: "1.9.5"
+
+jobs:
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    # Only run when the PR was actually merged (not just closed without merging)
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+
+    # Manual-approval gate configured under Settings → Environments → production
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Determine PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "number=${{ github.event.inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Fetches the exact plan artifact reviewed in the PR
+      - name: Download reviewed plan artifact
+        id: download
+        if: steps.pr.outputs.number != ''
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: terraform-ci.yml
+          pr: ${{ steps.pr.outputs.number }}
+          name: tfplan-pr-${{ steps.pr.outputs.number }}
+          path: ${{ env.TF_WORKING_DIR }}
+          search_artifacts: true
+        continue-on-error: true
+
+      - name: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Apply reviewed plan (fast path)
+        id: apply_saved
+        if: steps.download.outcome == 'success'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          if [ -f tfplan ]; then
+            echo "Applying the exact plan reviewed in PR #${{ steps.pr.outputs.number }}"
+            terraform apply -input=false -auto-approve tfplan
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Fallback: saved plan wasn't found — do a fresh plan + apply instead
+      - name: Fresh plan + apply (fallback path)
+        if: steps.apply_saved.outputs.applied != 'true'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          echo "⚠️ No saved plan found — running a fresh plan + apply."
+          terraform plan -input=false -no-color -out=tfplan
+          terraform apply -input=false -auto-approve tfplan
+
+      - name: Capture apply status
+        if: always()
+        id: status
+        run: echo "result=${{ job.status }}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured. Skipping notification."
+            exit 0
+          fi
+
+          STATUS="${{ steps.status.outputs.result }}"
+          EMOJI=$( [ "$STATUS" == "success" ] && echo "✅" || echo "❌" )
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR_NUM="${{ steps.pr.outputs.number }}"
+
+          MESSAGE="${EMOJI} *Terraform Apply: ${STATUS}*
+          Repo: \`${{ github.repository }}\`
+          ${PR_NUM:+PR: #${PR_NUM}}
+          Commit: \`${{ github.sha }}\`
+          Triggered by: ${{ github.actor }}
+
+          [View run](${RUN_URL})"
+
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview="true" \
+            --data-urlencode text="${MESSAGE}"
