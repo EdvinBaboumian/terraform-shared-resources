@@ -28,7 +28,7 @@ jobs:
     outputs:
       result: ${{ steps.fmt.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -48,7 +48,7 @@ jobs:
     outputs:
       result: ${{ steps.validate.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -72,7 +72,7 @@ jobs:
     outputs:
       result: ${{ steps.tflint.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
 
       - uses: terraform-linters/setup-tflint@v4
         with:
@@ -96,7 +96,7 @@ jobs:
     outputs:
       result: ${{ steps.checkov.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
 
       - name: Run Checkov
         id: checkov
@@ -125,7 +125,7 @@ jobs:
     outputs:
       result: ${{ steps.plan.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
 
       - uses: hashicorp/setup-terraform@v3
         with:

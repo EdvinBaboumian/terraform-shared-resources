@@ -13,12 +13,16 @@ resource "aws_launch_template" "wordpress" {
   image_id      = data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
 
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+  # Resolves SonarCloud network interface warning
+  network_interfaces {
+    associate_public_ip_address = false # Explicitly set to false for private subnets
+    security_groups             = [aws_security_group.ec2_sg.id]
+  }
 
   user_data = base64encode(<<-EOF
               #!/bin/bash
-              yum update -y
-              yum install -y httpd php php-mysqlnd amazon-efs-utils
+              dnf update -y
+              dnf install -y httpd php php-mysqlnd amazon-efs-utils wget tar
 
               # Start Web Server
               systemctl start httpd
@@ -38,7 +42,8 @@ resource "aws_launch_template" "wordpress" {
               sed -i "s/database_name_here/${var.db_name}/" /var/www/html/wp-config.php
               sed -i "s/username_here/${var.db_user}/" /var/www/html/wp-config.php
               sed -i "s/password_here/${var.db_password}/" /var/www/html/wp-config.php
-              sed -i "s/localhost/${aws_db_instance.wordpress.endpoint}/" /var/www/html/wp-config.php
+              # Uses .address instead of .endpoint to avoid trailing port collisions
+              sed -i "s/localhost/${aws_db_instance.wordpress.address}/" /var/www/html/wp-config.php
 
               # Fix permissions
               chown -R apache:apache /var/www/html
@@ -63,6 +68,15 @@ resource "aws_autoscaling_group" "wordpress" {
   launch_template {
     id      = aws_launch_template.wordpress.id
     version = "$Latest"
+  }
+
+  # Automatically replaces instances when Launch Template updates
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 50
+    }
+    triggers = ["tag"]
   }
 
   health_check_type         = "ELB"
