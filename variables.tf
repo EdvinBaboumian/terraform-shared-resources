@@ -37,5 +37,5 @@ variable "db_user" {
 variable "db_password" {
   type        = string
   sensitive   = true
-  description = "MySQL database admin password"
+  description = "Mypassword123"
 }
